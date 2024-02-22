@@ -348,7 +348,7 @@ def get_comp_corr_frequency_correcion(comp0, TE=None):
         for m in range(1,dPhase_dTE_dt.shape[-1]): # time points
             for t in range(1,dPhase_dTE_dt.shape[-2]): # echo times
                 weights[...,t,m] /= norm[...,m]
-                weights[~np.isfinite(weight[...,t,m]),t,m] = 0.0 # avoid nans or infinites in dPhase_dTE_dt below
+                weights[~np.isfinite(weights[...,t,m]),t,m] = 0.0 # avoid nans or infinites in dPhase_dTE_dt below
                 dPhase_dTE_dt[...,t,m] /= (dTE[...,t,m]*2.0*np.pi) # actual frequency change now
             # use first zero column to store the mean across TEs
             dPhase_dTE_dt[...,0,m] = np.sum(weights[...,1:,m]*dPhase_dTE_dt[...,1:,m], axis=-1)
