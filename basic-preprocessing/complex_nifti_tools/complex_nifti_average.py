@@ -70,6 +70,8 @@ def complex_nifti_average(magn_file, phas_file, phase_scale, contrasts, averagin
             phas_diff = nib.load(phase_corr).get_fdata().astype(np.float32) * phase_scale
             if np.ndim(phas_diff) < np.ndim(comp):
                 phas_diff = phas_diff[...,np.newaxis]
+        else:
+            phas_diff = np.cumsum(phas_diff, axis=-1)
 
         sigma = np.zeros(len(phas_diff.shape))
         sigma[:3] = 2

@@ -97,6 +97,7 @@ def phasematch_cartesian_function(real_file, imag_file, ref_vol=0):
         comp = np.roll(comp, shift=-ref_vol, axis=-1)
 
     phas_diff = np.angle(comp[...,1:]*np.conj(comp[...,:-1]))
+    phas_diff = np.cumsum(phas_diff, axis=-1)
 
     sigma = np.zeros(len(phas_diff.shape))
     sigma[:3] = 2

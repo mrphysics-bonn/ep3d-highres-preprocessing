@@ -24,12 +24,19 @@ def applyxfm4d(base_dir=os.getcwd(), name='applyxfm4d'):
 
     applyxfm4d.connect(inputnode  , 'in_file'         , split         , 'in_file'         )
 
+    # Select first vol as the reference
+    select = pe.Node(interface=util.Select(), name='select')
+    select.inputs.index = [0]
+
+    applyxfm4d.connect(split      , 'out_files'       , select         , 'inlist'         )
+
     # Apply motion correction to real and imag files
     applyxfm = pe.MapNode(interface=fsl.preprocess.ApplyXFM(), name='applyxfm', iterfield=['in_file', 'in_matrix_file'])
     applyxfm.inputs.apply_xfm = True
     applyxfm.inputs.interp = 'sinc'
 
-    applyxfm4d.connect(inputnode  , 'in_file'         , applyxfm      , 'reference'       )
+    #applyxfm4d.connect(inputnode  , 'in_file'         , applyxfm      , 'reference'       )
+    applyxfm4d.connect(select     , 'out'             , applyxfm      , 'reference'       )
     applyxfm4d.connect(split      , 'out_files'       , applyxfm      , 'in_file'         )
     applyxfm4d.connect(inputnode  , 'mat_files'       , applyxfm      , 'in_matrix_file'  )
 
@@ -44,9 +51,17 @@ def applyxfm4d(base_dir=os.getcwd(), name='applyxfm4d'):
     rename.inputs.keep_ext = True
     applyxfm4d.connect(merge      , 'merged_file'     , rename        , 'in_file'         )
 
+    # Copy affine from ref, just to be sure
+    cpgeom = pe.Node(interface=fsl.utils.CopyGeom(), name='cpgeom')
+    cpgeom.inputs.ignore_dims = True
+    applyxfm4d.connect(select     , 'out'             , cpgeom        , 'in_file'         )
+    applyxfm4d.connect(rename     , 'out_file'        , cpgeom        , 'dest_file'       )
+
+
     # Set up a node to define all outputs of this workflow
     outputnode = pe.Node(interface=util.IdentityInterface(fields=['out_file']), name="outputnode")
-    applyxfm4d.connect(rename     , 'out_file'        , outputnode    , 'out_file'        )
+    #applyxfm4d.connect(rename     , 'out_file'        , outputnode    , 'out_file'        )
+    applyxfm4d.connect(cpgeom     , 'out_file'        , outputnode    , 'out_file'        )
 
     return applyxfm4d
 
