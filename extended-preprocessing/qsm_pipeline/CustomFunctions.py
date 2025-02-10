@@ -271,7 +271,6 @@ def get_comp_phase_correction(applytopup_corrected_files, multi_echoes):
         applytopup_real = np.expand_dims(applytopup_real, axis=4)
         applytopup_real_pa = np.expand_dims(applytopup_real_pa, axis=4)
     applytopup_real = np.append(applytopup_real, applytopup_real_pa, axis=-1)
-    print(applytopup_real.shape)
 
     applytopup_imag = np.reshape(nib.load(applytopup_imag_ap).get_fdata(caching='unchanged', dtype=np.float32), shape, order='F')
     applytopup_imag_pa = np.reshape(nib.load(applytopup_imag_pa).get_fdata(caching='unchanged', dtype=np.float32), shape, order='F')
@@ -281,12 +280,11 @@ def get_comp_phase_correction(applytopup_corrected_files, multi_echoes):
     applytopup_imag = np.append(applytopup_imag, applytopup_imag_pa, axis=-1)
 
     comp = applytopup_real + 1.0j * applytopup_imag
-    print(comp.shape)
     return affine, comp
 
-def get_comp_corr_frequency_correcion(comp0, TE=None):
-    from scipy.ndimage.filters import gaussian_filter
-    print("enter get_comp_corr_frequency_correcion")
+def get_comp_corr_frequency_correction(comp0, TE=None, smooth_sigma=2):
+    from scipy.ndimage import gaussian_filter
+    print("enter get_comp_corr_frequency_correction")
     # 1. Determine frequency (times Delta TE) per self-contained measurment (t-seg and repetition).
     #    This is a wrapped Delta Phase image (with anatomical structure)
     # 0      | f1 (t2-t1)    | f1 (t3-t2)      | f1 (t4-t3)
@@ -314,11 +312,12 @@ def get_comp_corr_frequency_correcion(comp0, TE=None):
     weights = np.abs(HiP_dPhase_dTE_dt)
     del HiP_dPhase_dTE_dt
 
-    print("some arrays defined")
     #
     # 3. Unwrap the frequency change maps across time points (1D)
-    dPhase_dTE_dt = np.unwrap(dPhase_dTE_dt, axis=-1)
-    print("unwrapped")
+    # No, do not unwrap: because frequency changes may not only be monotonic drifts!
+    # Let's assume that the frequency estimations, and thus the frequency change
+    # estimations, are absolutely correct (within the experimental and nunerical limits).
+    # dPhase_dTE_dt = np.unwrap(dPhase_dTE_dt, axis=-1)
     #
 
     # If no TEs are specified, we have to live with the fact that we can't determine useful integration
@@ -326,7 +325,7 @@ def get_comp_corr_frequency_correcion(comp0, TE=None):
     # Furthermore, we have to assume that Delta TE may vary from columns to collumn. Hence, we
     # cannot use a mean frequency per timepoint, but leave an individual frequency change (times Delta TE)
     # per column and row.
-    # In a following step in the calling function get_comp_corr_phase_correction, the phases of
+    # In a final step, the phases of
     # measurements that correspond to each other are matched (which overwrites the corresponding integration
     # constants). However, the downsides are that this subsequent step involves another smoothing stage,
     # and that a potential offset will remain between the first measurements of unique contrasts/tsegs.
@@ -338,12 +337,9 @@ def get_comp_corr_frequency_correcion(comp0, TE=None):
         print("deal with actual TEs (part 1)")
         dTE = np.zeros_like(TE)
         dTE[1:,:] = np.diff(TE, axis=-2)
-        print(TE.shape)
-        print(TE, dTE)
 
         norm = np.sum(weights, axis=-2)
 
-        print(norm.shape, weights.shape, dPhase_dTE_dt.shape)
 
         for m in range(1,dPhase_dTE_dt.shape[-1]): # time points
             for t in range(1,dPhase_dTE_dt.shape[-2]): # echo times
@@ -357,14 +353,12 @@ def get_comp_corr_frequency_correcion(comp0, TE=None):
 
 
     # 4. Smooth the frequency change maps across voxels
-    gauss_sigma = np.array([2, 2, 2, 0, 0])
+    gauss_sigma = np.array([smooth_sigma, smooth_sigma, smooth_sigma, 0, 0])
     dPhase_dTE_dt = gaussian_filter(dPhase_dTE_dt, gauss_sigma)
-    print("filter applied")
 
     newshape = np.array(dPhase_dTE_dt.shape)[:-1]
     newshape[-1] = -1
     freq_change_times_DeltaTE = np.reshape(dPhase_dTE_dt, newshape, order='F')
-    print("reshaped")
 
     #
     # 5. Integrate along time points (cumsum)
@@ -373,7 +367,6 @@ def get_comp_corr_frequency_correcion(comp0, TE=None):
     # 0      |s(f3-f1)(t2-t1)|s(f3-f1)(t3-t2)  |s(f3-f1)(t4-t3)
     # ...
     dPhase_dTE = np.cumsum(dPhase_dTE_dt, axis=-1)
-    print("cumsum1")
 
     if TE is not None:
         print("deal with actual TEs (part 2)")
@@ -397,7 +390,6 @@ def get_comp_corr_frequency_correcion(comp0, TE=None):
         # 0      |s(f3-f1)(t2-t1)|s(f3-f1)(t3-t1)  |s(f3-f1)(t4-t1)
         # ...
         phase = np.cumsum(dPhase_dTE, axis=-2)
-        print("cumsum2")
     del dPhase_dTE, dPhase_dTE_dt
 
     #
@@ -413,13 +405,9 @@ def get_comp_corr_frequency_correcion(comp0, TE=None):
     #       |+s(f3 t1 - f1 t1) |+s(f3 t1 - f1 t1) |+s(f3 t1 - f1 t1) # this is the 3rd time point phase offset of TE1 compared to the 1st time point without noise
     # ...
 
-    print(comp0.shape)
-    print(phase.shape)
     comp0 *= np.exp(-1.0j * phase)
-    print("times phase")
 
     HiP_dPhase_dTE[...,1:,:] = comp0[...,1:,:]*np.conj(comp0[...,:-1,:])
-    print("more arrays defined")
 
     # ASSUMING that rephased multi-TE Delta TE is constant, average across TEs and
     # save unwrapped frequency (times TE) correction per time point
@@ -427,15 +415,7 @@ def get_comp_corr_frequency_correcion(comp0, TE=None):
 
     return comp0, freq_times_DeltaTE, freq_times_DeltaTE_corr, freq_change_times_DeltaTE
 
-def get_comp_corr_phase_correction(comp, multi_echo_shots=1, echo_times=None):
-    from scipy.ndimage.filters import gaussian_filter
-
-    print(comp.shape)
-
-    rms = np.sqrt(np.mean(np.abs(comp)**2, axis=-1)) * comp.shape[-1]
-
-    Q_before = np.abs(np.sum(comp, axis=-1)) / rms
-    #print(comp_roll.shape)
+def frequency_correction(comp, multi_echo_shots=1, echo_times=None, smooth_sigma=2):
 
     # NEW!!!
     # 0. Reshape original phase
@@ -449,7 +429,6 @@ def get_comp_corr_phase_correction(comp, multi_echo_shots=1, echo_times=None):
     sh[3] = sh[3]//multi_echo_shots
     sh[4] = sh[4]*multi_echo_shots
     comp0 = np.zeros(sh, dtype=np.complex64)
-    print(comp0.shape)
 
     TE = np.zeros(sh[3:], dtype=float)
     rephased_echoes = sh[3]
@@ -463,87 +442,23 @@ def get_comp_corr_phase_correction(comp, multi_echo_shots=1, echo_times=None):
                 if tseg>0:
                     TE[:, meas*multi_echo_shots+tseg] += (echo_times[rephased_echoes+tseg-1] - echo_times[0])
 
-        print("get new dimension of comp0 %i" % meas)
 
     if echo_times is not None:
         TE *= 1.0e-3 #ms -> s
-        print("constructed actual echo time matrix to be passed to get_comp_corr_frequency_correcion:")
+        print("constructed actual echo time matrix to be passed to get_comp_corr_frequency_correction:")
         print(TE)
     else:
         TE = None
 
-    comp0, freq_times_DeltaTE, freq_times_DeltaTE_corr, freq_change_times_DeltaTE = get_comp_corr_frequency_correcion(comp0, TE)
-    print("got get_comp_corr_frequency_correcion")
+    comp0, freq_times_DeltaTE, freq_times_DeltaTE_corr, freq_change_times_DeltaTE = get_comp_corr_frequency_correction(comp0, TE, smooth_sigma=smooth_sigma)
 
     # Reshape back
     for meas in range(comp.shape[4]):
         for tseg in range(multi_echo_shots):
             comp[:,:,:,tseg::multi_echo_shots,meas] = comp0[:,:,:,:,meas*multi_echo_shots+tseg]
-    print("reshaped to comp")
-
-    Q_after_freqcorr = np.abs(np.sum(comp, axis=-1)) / rms
-
-    #file = os.path.join(os.getcwd(), 'tmp_7_PhaseCorr.nii.gz')
-    #nii = nib.Nifti1Image(np.angle(comp).astype(np.float32),affine=np.eye(4))
-    #nii.set_data_dtype(np.float32)
-    #nib.save(nii, file)
-    #
 
 
-    if TE is None:
-        # The phase offsets per time point (const. with respect to TE) are
-        # corrected for in the subsequent (old) phase correction step
-
-        # OLD
-        comp_roll = np.rollaxis(comp, axis=comp.ndim-1, start=0)
-
-        # phase difference
-        hip_roll = hip(np.mean(comp, axis=-1), comp_roll)
-        hip_ = np.rollaxis(hip_roll, axis=0, start=comp.ndim)
-
-
-        gauss_sigma = np.array([2, 2, 2, 0, 0])
-        # We should ignore the magnitude of the HiP at this stage, shouldn't we?
-        #hip_ = np.angle(hip_)
-        #hip_real = gaussian_filter(np.cos(hip_), gauss_sigma)
-        #hip_imag = gaussian_filter(np.sin(hip_), gauss_sigma)
-
-        hip_real = gaussian_filter(np.real(hip_), gauss_sigma)
-        hip_imag = gaussian_filter(np.imag(hip_), gauss_sigma)
-
-        # hip_smooth = hip_real + 1.0j * hip_imag
-        # we don't need the magnitude
-        hip_smooth = np.exp(1.0j * np.arctan2(hip_imag, hip_real))
-
-        comp_corr = comp.copy() * hip_smooth
-    else:
-        comp_corr = comp
-
-    # NEW?
-
-    #hip_ = np.zeros(comp_roll.shape, dtype=float)
-    #hip_[1:,...] = hip_phase(np.angle(comp_roll[1:,...]), np.angle(comp_roll[:-1,...]))
-    #nib.save(nib.Nifti1Image(hip_, None), os.path.join(os.getcwd(),'pc_phasediff_0.nii.gz'))
-    #del comp_roll
-
-    #hip_real = gaussian_filter(np.cos(hip_), [1,2,2,2,0])
-    #hip_imag = gaussian_filter(np.sin(hip_), [1,2,2,2,0])
-    #hip_ = np.arctan2(hip_imag, hip_real)
-    #nib.save(nib.Nifti1Image(hip_, None), os.path.join(os.getcwd(),'pc_phasediff_1.nii.gz'))
-
-    #hip_ = np.unwrap(hip_, axis=0)
-    #hip_ = np.cumsum(hip_, axis=0)
-    #nib.save(nib.Nifti1Image(hip_, None), os.path.join(os.getcwd(),'pc_phasediff_2.nii.gz'))
-    #hip_ -= np.mean(hip_, axis=0)
-    #nib.save(nib.Nifti1Image(hip_, None), os.path.join(os.getcwd(),'pc_phasediff_3.nii.gz'))
-    #hip_ = np.rollaxis(hip_, axis=0, start=comp.ndim)
-    #hip_ = np.exp(-1.0j * hip_)
-
-    #comp_corr = comp.copy() * hip_
-
-    Q_after = np.abs(np.sum(comp_corr, axis=-1)) / rms
-
-    return comp_corr, Q_before, Q_after_freqcorr, Q_after, rms, freq_times_DeltaTE, freq_times_DeltaTE_corr, freq_change_times_DeltaTE
+    return comp, freq_times_DeltaTE, freq_times_DeltaTE_corr, freq_change_times_DeltaTE
 
 def get_comp_plots_phase_correction(comp,comp_corr):
 
@@ -588,84 +503,165 @@ def phase_correction(applytopup_corrected, multi_echoes, header, multi_echo_shot
     import nibabel as nib
     import numpy as np
     import os
-    from qsm_pipeline.CustomFunctions import (get_comp_phase_correction,
-                                              get_comp_corr_phase_correction)
+    from qsm_pipeline.CustomFunctions import (get_comp_phase_correction, frequency_correction)
+    from scipy.ndimage import gaussian_filter
+    print("enter phase correction")
 
+    # Configure which steps of the phase correction shall be performed:
+
+    # 1) Frequency drift correction aims to estimate the frequency drift over time from multi-echo data by phase differentiation.
+    # The phase changes (w.r.t. to the first volume) that correspond to the estimated frequency drift are subtracted.
+    # The phase offsets between repeated measurements are not known unless the spcecific echo times are provided.
+    # Providing the echo times can help, but it does not have to help necessarily.
+    # Frequency drift correction, overall, can help, but it does not have to help necessarily.
+    # !!! Importantly: if multiple measurements with different phase encode (and readout directions) are included (blip_up_down=0),
+    # the frequency drift correction has to be performed separately for each encoding direction to avoid misinterpretation of
+    # encoding-releated phase changes as frequency changes over time. This was not done so in previous code versions!!!
+    frequency_drift_correction = True
+
+    # 2) Encoding direction correction aims to subtract systemtic linear phase differences between different encoding direction data.
+    # E.g. due to readout gradient delays (kx-shift -> x phase slope) or phase encode shift (ky shift -> y phase slope). X,Y,Z phase slopes
+    # and constant phase offsets are considered. In previous code versions, only the X shift was considered.
+    # This step brings the phases of different measurements very close together.
+    encoding_direction_correction = True
+
+    # 3) Final phase matching aims to match the phase of repeated measurements by referencing to their mean phase and subtracting a smoothed
+    # version of the phase difference to that reference. This is a vital step too. CAUTION: the smoothing is done on the real and imaginary
+    # parts that correspond to the phase differences. After the preceding correction steps, the phase differences should be very smooth,
+    # but still one should beware of locations, where phase difference's real and imag paet still oscillate quickly (which might get blurred then).
+    final_phase_matching = True
+
+    # Gaussian spatial smoothing kernel used in step 1 and step 3 to smooth phase difference maps (ought to be very smooth except for noise).
+    # The noise shall be reduced enough such that it does not propagate to all images, where phase differences are going to be subtracted.
+    # Noise (including phase noise) should remain as independent as possible in multiple averages so that averaging improves SNR as much as possible.
+    smooth_sigma = 2
+
+    # Load uncorrected data
     affine, comp = get_comp_phase_correction(applytopup_corrected, multi_echoes)
     print("got comp_phase_correction")
 
+    N = comp.shape[-1]
+
+    rms = np.sqrt(np.mean(np.abs(comp)**2, axis=-1))
+    Q_before= np.abs(np.mean(comp, axis=-1))/rms
+
     if blip_up_down==0:
-        #fix for inaccuracy in phasecorr step: see Ruediger 21.1.2019 email
-        #####
-        N = comp.shape[-1]
-        # CAUTION: Assumes that in the phase difference between AP and PA measurements,
-        # there exists a linear gradient along the readout direction, which may be explained
-        # by the fact that for AP the whole k-space trajectory is rotated by 180 deg
-        # compared to PA (not only PE inversion).
-        readout_pc = comp[...,N//2:]*np.conj(comp[...,:N//2])
-        print(comp.shape, readout_pc.shape)
-        if N>2:
-            # average along multiple measurements per PE direction (if available)
-            readout_pc = np.mean(readout_pc, axis=-1)
-        print(comp.shape, readout_pc.shape)
+        if frequency_drift_correction:
+            # 1) Frequency (times Delta-TE) based correction: separate for both encodiung directions!
+            comp_corr_pe1, freq_times_DeltaTE1, freq_times_DeltaTE_corr1, freq_change_times_DeltaTE1 = frequency_correction(comp[...,:N//2], multi_echo_shots=multi_echo_shots, echo_times=echo_times, smooth_sigma=smooth_sigma)
+            comp_corr_pe2, freq_times_DeltaTE2, freq_times_DeltaTE_corr2, freq_change_times_DeltaTE2 = frequency_correction(comp[...,N//2:], multi_echo_shots=multi_echo_shots, echo_times=echo_times, smooth_sigma=smooth_sigma)
 
-        # Ahn and Cho approach to estimating linear phase slopw without unwrapping
-        readout_pc = readout_pc[1:,:,:,:] * np.conj(readout_pc[:-1,:,:,:])
-        print(comp.shape, readout_pc.shape)
-        readout_pc = np.mean(readout_pc)
-        print(comp.shape, readout_pc.shape)
-        X = np.arange(comp.shape[0])-comp.shape[0]*0.5
-        readout_pc = np.exp(0.5j*X*np.angle(readout_pc))
-        print(comp.shape, readout_pc.shape)
+            if N>2:
+                comp_corr = np.concatenate((comp_corr_pe1, comp_corr_pe2), axis=-1)
+                comp_corr_pe1 = np.mean(comp_corr_pe1, axis=-1)
+                comp_corr_pe2 = np.mean(comp_corr_pe2, axis=-1)
 
-        # Ahn and Cho phase correction approach (not to remove N/2 ghost,
-        # but to remove linear phase gradient between AP and PA measurement first
-        # to avoid phase wraps in subsequent estimation of phase drifts caused by
-        # subject motion or scanner heating, etc.
-        comp = np.rollaxis(comp, axis=0, start=comp.ndim)
-        comp[...,:N//2,:] *= readout_pc
-        comp[...,N//2:,:] *= np.conj(readout_pc)
-        comp = np.rollaxis(comp, axis=comp.ndim-1, start=0)
-        #####
+                PhasDte1 = np.concatenate((freq_times_DeltaTE1, freq_times_DeltaTE2), axis=-1)
+                PhasDte2= np.concatenate((freq_times_DeltaTE_corr1, freq_times_DeltaTE_corr2), axis=-1)
+                PhasDteDt = np.concatenate((freq_change_times_DeltaTE1, freq_change_times_DeltaTE2), axis=-1)
+            else:
+                comp_corr = np.concatenate((comp_corr_pe1[...,np.newaxis], comp_corr_pe2[...,np.newaxis]), axis=-1)
 
-    #mean_tu = np.mean(comp, axis=-1)
+                PhasDte1 = np.concatenate((freq_times_DeltaTE1[...,np.newaxis], freq_times_DeltaTE2[...,np.newaxis]), axis=-1)
+                PhasDte2 = np.concatenate((freq_times_DeltaTE_corr1[...,np.newaxis], freq_times_DeltaTE_corr2[...,np.newaxis]), axis=-1)
+                PhasDteDt = np.concatenate((freq_change_times_DeltaTE1[...,np.newaxis], freq_change_times_DeltaTE2[...,np.newaxis]), axis=-1)
 
-    #nn# mean_magn_tu_file = os.path.join(os.getcwd(), 'mean_magn_tu.nii.gz')
-    #nn# mean_phas_tu_file = os.path.join(os.getcwd(), 'mean_phas_tu.nii.gz')
+        else:
+            comp_corr = comp.copy()
+            comp_corr_pe1 = comp[...,:N//2]
+            comp_corr_pe2 = comp[...,N//2:]
 
-    #nn# nib.save(nib.Nifti1Image(np.abs(np.mean(comp, axis=-1)), affine), mean_magn_tu_file)
-    #nn# nib.save(nib.Nifti1Image(np.angle(np.mean(comp, axis=-1)), affine), mean_phas_tu_file)
+        del comp
 
-    comp_corr, Q_before, Q_after_freqcorr, Q_after, rms, PhasDte1, PhasDte2, PhasDteDt = get_comp_corr_phase_correction(comp, multi_echo_shots, echo_times)
-    print("got get_comp_corr_phase_correction")
+        if encoding_direction_correction:
+            # 2) Determine systematic phase difference between PE1 and PE2 scans and subtract from PE2 scans
+            # NEW: Use Ahn and Cho Method along all spatial directions for linear phase difference estimation
+            # and include constant term. Previously: only along readout direction (most systematic change for AP vs PA scans).
 
+            hip_pe = comp_corr_pe2*np.conj(comp_corr_pe1)
+            del comp_corr_pe1, comp_corr_pe2
 
-    #mean_pc = np.mean(comp_corr, axis=-1)
+            # mean along TE dimension because the systematic phase difference between PE1 and PE2 should be the same across TEs
+            hip_pe = np.mean(hip_pe, axis=-1) 
+            # consider only high magnitude values (within the brain)
+            hip_pe[hip_pe<np.mean(hip_pe)] = np.nan
 
-    #nn# mean_magn_pc_file = os.path.join(os.getcwd(), 'mean_magn_pc.nii.gz')
-    #nn# mean_phas_pc_file = os.path.join(os.getcwd(), 'mean_phas_pc.nii.gz')
+            # linear approximation using Ahn and Cho method along all three spatial dimensions
+            phase_const   = np.angle(np.nanmean(hip_pe))
 
-    #as mean_pc = np.mean(comp_corr, axis=-1)
-    #nib.save(nib.Nifti1Image(np.abs(mean_pc), affine), mean_magn_pc_file)
-    #nib.save(nib.Nifti1Image(np.angle(mean_pc), affine), mean_phas_pc_file)
-    #nn# nib.save(nib.Nifti1Image(np.abs(np.mean(comp_corr, axis=-1)), affine), mean_magn_pc_file)
-    #nn# nib.save(nib.Nifti1Image(np.angle(np.mean(comp_corr, axis=-1)), affine), mean_phas_pc_file)
+            phase_slope_X = hip_pe[1:,:,:] * np.conj(hip_pe[:-1,:,:])
+            phase_slope_X = np.angle(np.nanmean(phase_slope_X))
+            x = np.arange(comp_corr.shape[0])-comp_corr.shape[0]*0.5
 
-    """
-    get_comp_plots_phase_correction(comp,comp_corr)
-    """
-    del comp
+            phase_slope_Y = hip_pe[:,1:,:] * np.conj(hip_pe[:,:-1,:])
+            phase_slope_Y = np.angle(np.nanmean(phase_slope_Y))
+            y = np.arange(comp_corr.shape[1])-comp_corr.shape[1]*0.5
+
+            phase_slope_Z = hip_pe[:,:,1:] * np.conj(hip_pe[:,:,:-1])
+            phase_slope_Z = np.angle(np.nanmean(phase_slope_Z))
+            z = np.arange(comp_corr.shape[2])-comp_corr.shape[2]*0.5
+
+            del hip_pe
+
+            X,Y,Z = np.meshgrid(x,y,z, indexing='ij')
+            phase_bias_linear = X*phase_slope_X + Y*phase_slope_Y + Z*phase_slope_Z + phase_const
+
+            del X,Y,Z
+            
+            Nmeas = comp_corr.shape[-1]
+            if N>2:
+                comp_corr[...,Nmeas//2:] *= np.exp(-1.0j*phase_bias_linear[:,:,:,np.newaxis,np.newaxis])
+            else:
+                comp_corr[...,-1] *= np.exp(-1.0j*phase_bias_linear[:,:,:,np.newaxis])
+
+            del phase_bias_linear
+            
+        elif frequency_drift_correction:
+            comp_corr, PhasDte1, PhasDte2, PhasDteDt = frequency_correction(comp, multi_echo_shots=multi_echo_shots, echo_times=echo_times, smooth_sigma=smooth_sigma)
+
+    
+    Q_inter = np.abs(np.mean(comp_corr,axis=-1))/rms
+
+    if final_phase_matching:
+        # Remaining phase offsets per time point (const. with respect to TE) are
+        # corrected for in the final (old) phase correction step
+        # This always be done!
+        comp_roll = np.rollaxis(comp_corr, axis=comp_corr.ndim-1, start=0)
+
+        # phase difference to the mean phase!
+        hip_roll = hip(np.mean(comp_corr, axis=-1), comp_roll)
+        hip_ = np.rollaxis(hip_roll, axis=0, start=comp_corr.ndim)
+
+        del hip_roll
+
+        gauss_sigma = np.array([smooth_sigma, smooth_sigma, smooth_sigma, 0, 0])
+
+        hip_real = gaussian_filter(np.real(hip_), gauss_sigma)
+        hip_imag = gaussian_filter(np.imag(hip_), gauss_sigma)
+
+        del hip_
+
+        # hip_smooth = hip_real + 1.0j * hip_imag
+        # we don't need the magnitude
+        hip_smooth = np.exp(1.0j * np.arctan2(hip_imag, hip_real))
+
+        comp_corr *= hip_smooth
+
+        del hip_smooth
+
+    Q_after = np.abs(np.mean(comp_corr,axis=-1))/rms
 
 
     Nmeas = comp_corr.shape[-1]
 
 
+    # Save corrected data
     pc_AP_magn_file = os.path.join(os.getcwd(), 'pc_AP_magn.nii.gz')
     pc_PA_magn_file = os.path.join(os.getcwd(), 'pc_PA_magn.nii.gz')
     pc_AP_phas_file = os.path.join(os.getcwd(), 'pc_AP_phas.nii.gz')
     pc_PA_phas_file = os.path.join(os.getcwd(), 'pc_PA_phas.nii.gz')
     pc_Q_before_file = os.path.join(os.getcwd(), 'pc_Q_before.nii.gz')
-    pc_Q_after_freqcorr_file = os.path.join(os.getcwd(), 'pc_Q_after_freqcorr.nii.gz')
+    pc_Q_inter_file = os.path.join(os.getcwd(), 'pc_Q_inter.nii.gz')
     pc_Q_after_file = os.path.join(os.getcwd(), 'pc_Q_after.nii.gz')
     pc_RMS_file = os.path.join(os.getcwd(), 'pc_RMS.nii.gz')
     pc_PhasDte_orig_file = os.path.join(os.getcwd(), 'pc_PhasDte_orig.nii.gz')
@@ -685,7 +681,7 @@ def phase_correction(applytopup_corrected, multi_echoes, header, multi_echo_shot
         nib.save(nib.Nifti1Image(np.angle(comp_corr[...,Nmeas//2:]), affine ,header=header), pc_PA_phas_file)
 
     nib.save(nib.Nifti1Image(Q_before, affine ,header=header), pc_Q_before_file)
-    nib.save(nib.Nifti1Image(Q_after_freqcorr, affine ,header=header), pc_Q_after_freqcorr_file)
+    nib.save(nib.Nifti1Image(Q_inter, affine ,header=header), pc_Q_inter_file)
     nib.save(nib.Nifti1Image(Q_after, affine ,header=header), pc_Q_after_file)
     nib.save(nib.Nifti1Image(rms, affine ,header=header), pc_RMS_file)
     nib.save(nib.Nifti1Image(PhasDte1, affine ,header=header), pc_PhasDte_orig_file)
@@ -697,13 +693,12 @@ def phase_correction(applytopup_corrected, multi_echoes, header, multi_echo_shot
            os.path.abspath(pc_AP_phas_file), \
            os.path.abspath(pc_PA_phas_file), \
            os.path.abspath(pc_Q_before_file), \
-           os.path.abspath(pc_Q_after_freqcorr_file), \
+           os.path.abspath(pc_Q_inter_file), \
            os.path.abspath(pc_Q_after_file), \
            os.path.abspath(pc_RMS_file), \
            os.path.abspath(pc_PhasDte_orig_file), \
            os.path.abspath(pc_PhasDte_corr_file), \
            os.path.abspath(pc_PhasDteDt_file)
-
 
 
 
