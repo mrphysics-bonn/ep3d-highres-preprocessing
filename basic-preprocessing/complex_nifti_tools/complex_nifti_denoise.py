@@ -64,6 +64,7 @@ def complex_antsnlm_denoise(magn_file, phas_file, phase_scale, out=None, diff=Fa
             pad = [[search_radius, search_radius]] * real.numpy().ndim
             real = ants.pad_image(real, pad_width=pad)
             imag = ants.pad_image(imag, pad_width=pad)
+            mask = ants.pad_image(mask, pad_width=pad)
 
         print(TAG, "Denoise temporary real image")
         real_denoise = ants.denoise_image(real, mask, noise_model='Gaussian')
