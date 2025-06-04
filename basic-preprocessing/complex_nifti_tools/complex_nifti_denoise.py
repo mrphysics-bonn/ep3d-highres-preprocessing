@@ -12,24 +12,14 @@ __email__ = "ruediger.stirnberg@dzne.de"
 TAG = '[CNLM]'
 
 
-def complex_antsnlm_denoise(magn_file, phas_file, phase_scale, out=None, diff=False, background_free=False, pad_image=False):
+def complex_antsnlm_denoise(magn_file, phas_file, phase_scale, out=None, diff=False, background_free=False, pad_image=True):
 
     print(TAG, 'Load magnitude')
     magn = ants.image_read(magn_file)
     temp3D = ants.image_read(magn_file, dimension=3)
     print(TAG, 'Load phase')
     phas = ants.image_read(phas_file)
-
-    search_radius = 3  # default search radius for ants NLM denoising (r param in ants.denoise_image())
-    if pad_image:
-        print(TAG, 'Pad images')
-        pad = [[search_radius, search_radius]] * magn.numpy().ndim
-        magn_pad = ants.pad_image(magn, pad_width=pad)
-        phas_pad = ants.pad_image(phas, pad_width=pad)
-        temp3D = ants.pad_image(temp3D, pad_width=pad)
-        comp = magn_pad.numpy().astype(np.float32) * np.exp(1.0j * phas_pad.numpy().astype(np.float32) * phase_scale)
-    else:
-        comp = magn.numpy().astype(np.float32) * np.exp(1.0j * phas.numpy().astype(np.float32) * phase_scale)
+    comp = magn.numpy().astype(np.float32) * np.exp(1.0j * phas.numpy().astype(np.float32) * phase_scale)
 
     if out is None:
         magn_out_file = magn_file + '.nlm.nii.gz'
@@ -67,6 +57,13 @@ def complex_antsnlm_denoise(magn_file, phas_file, phase_scale, out=None, diff=Fa
         imag = np.imag(comp[tuple(slc)] * np.exp(-1.0j * phas_baseline)) / 2.0 + 4096 / 2
         real = temp3D.new_image_like(real)
         imag = temp3D.new_image_like(imag)
+        
+        search_radius = 3  # default search radius for ants NLM denoising
+        if pad_image:
+            print(TAG, 'Pad images')
+            pad = [[search_radius, search_radius]] * real.numpy().ndim
+            real = ants.pad_image(real, pad_width=pad)
+            imag = ants.pad_image(imag, pad_width=pad)
 
         print(TAG, "Denoise temporary real image")
         real_denoise = ants.denoise_image(real, mask, noise_model='Gaussian')
@@ -77,18 +74,16 @@ def complex_antsnlm_denoise(magn_file, phas_file, phase_scale, out=None, diff=Fa
         imag_denoise = imag_denoise * 2 - 4096
 
         del real, imag
+        
+        # remove padding if applied
+        pad_slices = tuple(slice(search_radius, -search_radius) for _ in range(real_denoise.numpy().ndim)) if pad_image else tuple(slice(None) for _ in range(real_denoise.numpy().ndim))
 
         print(TAG, "Convert back to denoised magnitude and phase")
-        comp_denoise[tuple(slc)] = (real_denoise.numpy()) + 1.0j * (imag_denoise.numpy())
+        comp_denoise[tuple(slc)] = (real_denoise.numpy()[pad_slices]) + 1.0j * (imag_denoise.numpy()[pad_slices])
         comp_denoise[tuple(slc)] *= np.exp(1.0j * phas_baseline)
 
-    if pad_image:
-        pad_slices = tuple(slice(search_radius, -search_radius) for _ in range(comp_denoise.ndim - 1))  # -1 b/c last axis is used for volume repetitions
-    else:
-        pad_slices = tuple(slice(None) for _ in range(comp_denoise.ndim - 1))
-
-    magn_denoise = magn.new_image_like(np.squeeze(np.abs(comp_denoise[pad_slices])))
-    phas_denoise = phas.new_image_like(np.squeeze(np.angle(comp_denoise[pad_slices])) / phase_scale)
+    magn_denoise = magn.new_image_like(np.squeeze(np.abs(comp_denoise)))
+    phas_denoise = phas.new_image_like(np.squeeze(np.angle(comp_denoise)) / phase_scale)
 
     print(TAG, 'Save magnitude', magn_out_file)
     ants.image_write(magn_denoise, magn_out_file)
@@ -98,12 +93,12 @@ def complex_antsnlm_denoise(magn_file, phas_file, phase_scale, out=None, diff=Fa
 
     if diff:
         comp_noise = comp - comp_denoise
-        magn_noise = magn.new_image_like(np.abs(comp_noise[pad_slices]))
-        phas_noise = phas.new_image_like(np.angle(comp_noise[pad_slices]) / phase_scale)
+        magn_noise = magn.new_image_like(np.abs(comp_noise))
+        phas_noise = phas.new_image_like(np.angle(comp_noise) / phase_scale)
         print(TAG, 'Save magnitude noise', magn_diff_file)
         ants.image_write(magn_noise, magn_diff_file)
         print(TAG, 'Save phase noise', phas_diff_file)
-        ants.image_write(phas_noise, phas_diff_file)
+        ants.image_write(phas_noise, phas_diff_file)    
 
 
 def main():
